@@ -1,0 +1,13 @@
+{
+  "python.analysis.extraPaths": [
+    "./farro-mendez-ipa"
+  ],
+  "python.autoComplete.extraPaths": [
+    "./farro-mendez-ipa"
+  ],
+  "python.testing.pytestArgs": [
+    "farro-mendez-ipa/tests"
+  ],
+  "python.testing.unittestEnabled": false,
+  "python.testing.pytestEnabled": true
+}

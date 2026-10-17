@@ -1,0 +1,528 @@
+{
+  "name": "Atencion de Pedidos por WhatsApp (Agente Gemini)",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "messages"
+        ],
+        "options": {}
+      },
+      "id": "24233cd3-92a5-4a8b-9564-2ac7c89e3d38",
+      "name": "WhatsApp Trigger",
+      "type": "n8n-nodes-base.whatsAppTrigger",
+      "typeVersion": 1,
+      "position": [
+        -320,
+        128
+      ],
+      "webhookId": "d7617d5e-a404-4cb3-b1b4-9443049cc6b3",
+      "credentials": {
+        "whatsAppTriggerApi": {
+          "id": "OfyEowPEwyW9SQSS",
+          "name": "WhatsApp OAuth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Cliente {{ $json.messages[0].from }} escribio: {{ $json.messages[0].text ? $json.messages[0].text.body : 'Envio un archivo adjunto (posible comprobante de pago)' }}",
+        "options": {
+          "systemMessage": "Eres el asistente de \"Atencion de Pedidos por Canal Digital (WhatsApp)\" de una tienda de instrumentos de laboratorio.\nAtiendes a un cliente por WhatsApp; el numero de telefono del cliente es su identificador (cliente/from).\nResponde SIEMPRE en espanol, de forma breve, cordial y clara. Devuelve solo el texto que se enviara al cliente.\n\nTienes estas herramientas y debes usarlas exactamente asi:\n- validar_solicitud: verifica si el mensaje es una consulta interpretable de productos.\n- consultar_stock_y_precio: devuelve el catalogo (product_id, nombre, precio, stock).\n- registrar_pedido: inserta el pedido en la BD Pedidos (estado \"registrado\").\n- validar_comprobante_pago: valida el comprobante de pago enviado.\n- registrar_venta: inserta la venta en la BD Ventas cuando el comprobante es valido.\n- derivar_a_humano: escala el caso a un asesor humano.\n\nFLUJO OBLIGATORIO (BPMN TO-BE), respeta el orden:\n[PASO 1] Consulta inicial: llama validar_solicitud con el texto del cliente.\n  - Si NO es valida/entendible: responde con un mensaje respetuoso indicando que no se pudo procesar la solicitud y termina.\n  - Si es valida: llama consultar_stock_y_precio.\n[PASO 2] Validacion de stock: identifica el producto pedido en el catalogo.\n  - Si NO hay stock (stock <= 0) o el producto no existe: informa la falta de disponibilidad y finaliza (\"Solicitud finalizada\").\n  - Si SI hay stock: informa nombre, precio y stock disponible y pregunta si desea confirmar la compra.\n[PASO 3] Confirmacion y registro de pedido:\n  - Si el cliente responde que NO quiere comprar: cancela cordialmente y finaliza.\n  - Si el cliente responde que SI: llama registrar_pedido (genera pedido_id unico, estado \"registrado\") y luego envia los metodos de pago disponibles: Efectivo/Contraentrega, Tarjeta, y Yape/Plin/Transferencia. Pide el comprobante tras el pago.\n[PASO 4] Validacion de pago y confirmacion de venta: cuando el cliente envie el comprobante/confirmacion de pago:\n  - Llama validar_comprobante_pago.\n  - Si es VALIDO: llama registrar_venta (genera venta_id unico) y envia el mensaje de confirmacion del pedido al cliente; finaliza con exito.\n  - Si es INVALIDO: solicita reenviar el comprobante. Si el comprobante vuelve a fallar (segundo intento fallido en la conversacion), llama derivar_a_humano y avisa al cliente que un asesor lo atendera.\n\nReglas: usa la memoria de la conversacion para saber en que paso vas (si ya hay pedido registrado, cuantos comprobantes han fallado, etc.). Nunca inventes precios ni stock: usa siempre consultar_stock_y_precio. Ante errores recurrentes o pedidos no soportados, usa derivar_a_humano.",
+          "maxIterations": 12,
+          "enableStreaming": false
+        }
+      },
+      "id": "e16bdbe6-96c1-43df-8297-2d483f8f9091",
+      "name": "AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        608,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-2.5-flash",
+        "options": {
+          "temperature": 0.3
+        }
+      },
+      "id": "37df3070-4c21-4bb0-b8b0-089f66f63d0a",
+      "name": "Google Gemini Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        128,
+        352
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": null,
+          "name": "Gateway credits",
+          "__aiGatewayManaged": true
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('WhatsApp Trigger').item.json[\"messages[0]\"].from }}",
+        "contextWindowLength": 10
+      },
+      "id": "43a14c5e-a1a2-454a-8b7b-620d9398c76d",
+      "name": "Window Buffer Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.4,
+      "position": [
+        304,
+        368
+      ]
+    },
+    {
+      "parameters": {
+        "description": "Verifica si el mensaje del cliente es una consulta valida de productos del catalogo. Pasa el texto del mensaje del cliente. Devuelve JSON con { valida: boolean, motivo, texto }.",
+        "jsCode": "const q = (query || \"\").toString().trim();\nif (!q) {\n  return JSON.stringify({ valida: false, motivo: \"Mensaje vacio o sin contenido interpretable\" });\n}\nif (q.length < 2) {\n  return JSON.stringify({ valida: false, motivo: \"Mensaje demasiado corto para interpretar una solicitud\" });\n}\nreturn JSON.stringify({ valida: true, motivo: \"Solicitud interpretable\", texto: q });"
+      },
+      "id": "74a5ae35-4d57-4655-8be2-cd3beeff284d",
+      "name": "validar_solicitud",
+      "type": "@n8n/n8n-nodes-langchain.toolCode",
+      "typeVersion": 1.3,
+      "position": [
+        448,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Consulta la base de datos de productos e inventario. Devuelve todos los productos con product_id, nombre, precio y stock. Usala para verificar disponibilidad y precio de lo que pide el cliente.",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "q9fNxWBvnO5mfDAG",
+          "cachedResultName": "Inventario"
+        },
+        "returnAll": true
+      },
+      "id": "6fee32b8-8160-4230-9102-d71834c587d9",
+      "name": "consultar_stock_y_precio",
+      "type": "n8n-nodes-base.dataTableTool",
+      "typeVersion": 1.1,
+      "position": [
+        608,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Inserta una nueva orden en la base de datos de Pedidos cuando el cliente confirma la compra. Genera un pedido_id unico (formato PED-<numero>) y usa estado \"registrado\".",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "qsSgFfwhoB8W6AIZ",
+          "cachedResultName": "Pedidos"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "pedido_id": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('pedido_id', 'Codigo unico del pedido, formato PED-<numero o timestamp>') }}",
+            "cliente": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('cliente', 'Numero de telefono del cliente (from)') }}",
+            "product_id": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('product_id', 'Codigo del producto solicitado') }}",
+            "producto_nombre": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('producto_nombre', 'Nombre del producto solicitado') }}",
+            "cantidad": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('cantidad', 'Cantidad de unidades solicitadas', 'number') }}",
+            "precio_unitario": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('precio_unitario', 'Precio unitario del producto', 'number') }}",
+            "total": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('total', 'Total del pedido (cantidad x precio_unitario)', 'number') }}",
+            "metodo_pago": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('metodo_pago', 'Metodo de pago elegido o \"pendiente\" si aun no elige') }}",
+            "estado": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('estado', 'Estado del pedido, usar \"registrado\"') }}"
+          },
+          "schema": [
+            {
+              "id": "pedido_id",
+              "displayName": "pedido_id",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cliente",
+              "displayName": "cliente",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "product_id",
+              "displayName": "product_id",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "producto_nombre",
+              "displayName": "producto_nombre",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cantidad",
+              "displayName": "cantidad",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "precio_unitario",
+              "displayName": "precio_unitario",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "total",
+              "displayName": "total",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "metodo_pago",
+              "displayName": "metodo_pago",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "estado",
+              "displayName": "estado",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b1fb1e48-763e-4019-b0d1-5d78eb8ed60e",
+      "name": "registrar_pedido",
+      "type": "n8n-nodes-base.dataTableTool",
+      "typeVersion": 1.1,
+      "position": [
+        736,
+        336
+      ]
+    },
+    {
+      "parameters": {
+        "description": "Valida el comprobante de pago enviado por el cliente. Pasa el codigo/numero de operacion del comprobante (o la descripcion del archivo). Devuelve JSON con { valido: boolean, motivo, comprobante }. Regla: valido si tiene 6 o mas caracteres.",
+        "jsCode": "const c = (query || \"\").toString().trim();\nif (!c) {\n  return JSON.stringify({ valido: false, motivo: \"No se recibio ningun comprobante\" });\n}\nconst valido = c.replace(/\\s+/g, \"\").length >= 6;\nreturn JSON.stringify({\n  valido,\n  comprobante: c,\n  motivo: valido ? \"Comprobante valido\" : \"Comprobante invalido: debe tener al menos 6 caracteres\"\n});"
+      },
+      "id": "e575c882-612b-416a-b02e-ee290abff09f",
+      "name": "validar_comprobante_pago",
+      "type": "@n8n/n8n-nodes-langchain.toolCode",
+      "typeVersion": 1.3,
+      "position": [
+        880,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Inserta el registro definitivo de la venta en la base de datos de Ventas cuando el comprobante de pago es valido. Genera un venta_id unico (formato VEN-<numero>).",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "HaQ1iAOrgYHEuk7r",
+          "cachedResultName": "Ventas"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "venta_id": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('venta_id', 'Codigo unico de la venta, formato VEN-<numero o timestamp>') }}",
+            "pedido_id": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('pedido_id', 'Codigo del pedido asociado') }}",
+            "cliente": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('cliente', 'Numero de telefono del cliente') }}",
+            "product_id": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('product_id', 'Codigo del producto vendido') }}",
+            "monto": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('monto', 'Monto total pagado', 'number') }}",
+            "comprobante": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('comprobante', 'Codigo/numero de operacion del comprobante validado') }}"
+          },
+          "schema": [
+            {
+              "id": "venta_id",
+              "displayName": "venta_id",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "pedido_id",
+              "displayName": "pedido_id",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cliente",
+              "displayName": "cliente",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "product_id",
+              "displayName": "product_id",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "monto",
+              "displayName": "monto",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "comprobante",
+              "displayName": "comprobante",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "9f388543-61d8-4583-90d2-4d74b5e5852a",
+      "name": "registrar_venta",
+      "type": "n8n-nodes-base.dataTableTool",
+      "typeVersion": 1.1,
+      "position": [
+        992,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Escala la atencion a un asesor humano registrando el caso en la base de datos Casos_Escalados. Usala cuando el comprobante falla dos veces o ante solicitudes no soportadas / errores recurrentes.",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "GR5QMgTM9bwuJB4N",
+          "cachedResultName": "Casos_Escalados"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "caso_id": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('caso_id', 'Codigo unico del caso escalado, formato CASO-<numero>') }}",
+            "cliente": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('cliente', 'Numero de telefono del cliente') }}",
+            "pedido_id": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('pedido_id', 'Codigo del pedido asociado si existe, si no \"N/A\"') }}",
+            "motivo": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('motivo', 'Motivo de la derivacion (ej: comprobante fallido 2 veces, solicitud no soportada)') }}"
+          },
+          "schema": [
+            {
+              "id": "caso_id",
+              "displayName": "caso_id",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cliente",
+              "displayName": "cliente",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "pedido_id",
+              "displayName": "pedido_id",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "motivo",
+              "displayName": "motivo",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3c070cbb-c07a-4a6d-a6fc-7c9ba251e16d",
+      "name": "derivar_a_humano",
+      "type": "n8n-nodes-base.dataTableTool",
+      "typeVersion": 1.1,
+      "position": [
+        1168,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "<__PLACEHOLDER_VALUE__ID del numero de WhatsApp Business (phoneNumberId)__>",
+        "recipientPhoneNumber": "={{ $('WhatsApp Trigger').item.json.messages[0].from }}",
+        "textBody": "={{ $json.output }}",
+        "additionalFields": {}
+      },
+      "id": "6db57155-be63-435c-a7d0-14ea3b1fab53",
+      "name": "WhatsApp Send Message",
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        1440,
+        112
+      ],
+      "webhookId": "09c67016-d3f5-46cc-9905-337799222331"
+    }
+  ],
+  "connections": {
+    "WhatsApp Trigger": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "WhatsApp Send Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Window Buffer Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "validar_solicitud": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "consultar_stock_y_precio": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "registrar_pedido": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "validar_comprobante_pago": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "registrar_venta": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "derivar_a_humano": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "staticData": null,
+  "pinData": {},
+  "triggerCount": 0,
+  "meta": null
+}

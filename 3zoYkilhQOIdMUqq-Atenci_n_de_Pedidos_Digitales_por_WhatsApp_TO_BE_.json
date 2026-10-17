@@ -1,0 +1,1207 @@
+{
+  "name": "Atención de Pedidos Digitales por WhatsApp (TO-BE)",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "messages"
+        ],
+        "options": {}
+      },
+      "id": "949c51e8-9899-44db-870a-77ca04f0d305",
+      "name": "WhatsApp Trigger",
+      "type": "n8n-nodes-base.whatsAppTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        576
+      ],
+      "webhookId": "e205525c-a0c5-45b0-bcfa-94cf62cfcfa7",
+      "credentials": {
+        "whatsAppTriggerApi": {
+          "id": "OfyEowPEwyW9SQSS",
+          "name": "WhatsApp OAuth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const v = $input.first().json || {};\nconst msg = (v.messages && v.messages[0]) || {};\nconst meta = v.metadata || {};\nlet texto = '';\nif (msg.text && msg.text.body) { texto = msg.text.body; }\nelse if (msg.button && msg.button.text) { texto = msg.button.text; }\nelse if (msg.interactive && msg.interactive.list_reply) { texto = msg.interactive.list_reply.title; }\nconst tipo = msg.type || 'text';\nlet media_id = '';\nif (tipo === 'image' && msg.image) { media_id = msg.image.id || ''; }\nelse if (tipo === 'document' && msg.document) { media_id = msg.document.id || ''; }\nreturn [{ json: {\n  telefono: msg.from || '',\n  texto: texto,\n  tipo: tipo,\n  media_id: media_id,\n  message_id: msg.id || '',\n  phone_number_id: meta.phone_number_id || '',\n  timestamp: msg.timestamp || ''\n} }];"
+      },
+      "id": "921d83f8-b321-4c23-b78f-f4ca50cc47fb",
+      "name": "Normalizar Entrada",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        576
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM conversaciones WHERE telefono = $1 LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$json.telefono] }}"
+        }
+      },
+      "id": "acf2c491-d65e-4949-9e8c-f87801f3e63f",
+      "name": "Buscar Conversación",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        448,
+        576
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "LejxlI9cpUbAOepL",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const conv = $input.first().json || {};\nconst norm = $('Normalizar Entrada').first().json;\nconst estado = conv.estado || null;\nlet fase = 'consulta';\nif (estado === 'esperando_pago' || norm.tipo === 'image' || norm.tipo === 'document') { fase = 'pago'; }\nelse if (estado === 'esperando_confirmacion') { fase = 'confirmacion'; }\nreturn [{ json: {\n  telefono: norm.telefono, texto: norm.texto, tipo: norm.tipo, media_id: norm.media_id,\n  message_id: norm.message_id, phone_number_id: norm.phone_number_id, estado: estado,\n  producto_id: conv.producto_id || null, producto_nombre: conv.producto_nombre || null,\n  cantidad: conv.cantidad || null, precio: conv.precio || null, pedido_id: conv.pedido_id || null,\n  intentos: conv.intentos || 0, fase: fase\n} }];"
+      },
+      "id": "1791224f-9053-4e26-9daa-deb2ae2718de",
+      "name": "Determinar Fase",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        576
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "r0",
+                    "leftValue": "={{ $json.fase }}",
+                    "rightValue": "consulta",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "r1",
+                    "leftValue": "={{ $json.fase }}",
+                    "rightValue": "confirmacion",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "r2",
+                    "leftValue": "={{ $json.fase }}",
+                    "rightValue": "pago",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "626c20ea-fdab-4e32-8579-a43c0aa81aa9",
+      "name": "Router de Fase",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        896,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "text": "={{ $json.texto }}",
+        "attributes": {
+          "attributes": [
+            {
+              "name": "es_valida",
+              "type": "boolean",
+              "description": "true si el mensaje es una solicitud/consulta de un producto para comprar (menciona un producto), false si es saludo, spam o algo no entendible",
+              "required": true
+            },
+            {
+              "name": "producto",
+              "description": "Nombre o código del producto solicitado. Vacío si no aplica."
+            },
+            {
+              "name": "cantidad",
+              "type": "number",
+              "description": "Cantidad de unidades solicitadas. 1 si no se indica."
+            }
+          ]
+        },
+        "options": {
+          "systemPromptTemplate": "Eres un asistente de ventas. Analiza el mensaje del cliente y extrae si es una solicitud de producto válida, el producto y la cantidad."
+        }
+      },
+      "id": "777c643a-6199-4a11-b4f1-8721c342c956",
+      "name": "Validar Solicitud",
+      "type": "@n8n/n8n-nodes-langchain.informationExtractor",
+      "typeVersion": 1.2,
+      "position": [
+        1120,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "45cf5acb-735a-4794-96fb-07de6967b9d6",
+      "name": "Modelo Gemini (Validación)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        1200,
+        320
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": null,
+          "name": "Gateway credits",
+          "__aiGatewayManaged": true
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "v1",
+              "leftValue": "={{ $json.output.es_valida }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "16dc3986-b468-4dc7-b084-8b6e2e915ef5",
+      "name": "¿Solicitud Válida?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1472,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT codigo, nombre, precio, stock FROM inventario WHERE nombre ILIKE '%' || $1 || '%' OR codigo ILIKE $1 ORDER BY stock DESC LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$json.output.producto] }}"
+        }
+      },
+      "id": "875b73a9-08a2-44de-974c-2e38b1b9b741",
+      "name": "Consultar Stock y Precio",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1696,
+        96
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "LejxlI9cpUbAOepL",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "s1",
+              "leftValue": "={{ $json.stock }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "bdc12356-1d46-4da6-ba00-05ecebd36542",
+      "name": "¿Hay Stock?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1920,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO conversaciones (telefono, estado, producto_id, producto_nombre, cantidad, precio, intentos, actualizado_en) VALUES ($1, 'esperando_confirmacion', $2, $3, $4, $5, 0, NOW()) ON CONFLICT (telefono) DO UPDATE SET estado = EXCLUDED.estado, producto_id = EXCLUDED.producto_id, producto_nombre = EXCLUDED.producto_nombre, cantidad = EXCLUDED.cantidad, precio = EXCLUDED.precio, intentos = 0, actualizado_en = NOW()",
+        "options": {
+          "queryReplacement": "={{ [$(\"Normalizar Entrada\").item.json.telefono, $json.codigo, $json.nombre, $(\"Validar Solicitud\").item.json.output.cantidad, $json.precio] }}"
+        }
+      },
+      "id": "88bebe12-ad14-48e5-83ec-0cad8c6e5eae",
+      "name": "Guardar Estado: Confirmación",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2144,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "LejxlI9cpUbAOepL",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "={{ $(\"Normalizar Entrada\").item.json.phone_number_id }}",
+        "recipientPhoneNumber": "={{ $(\"Normalizar Entrada\").item.json.telefono }}",
+        "textBody": "=Contamos con {{ $(\"Consultar Stock y Precio\").item.json.nombre }} a S/ {{ $(\"Consultar Stock y Precio\").item.json.precio }} (stock disponible: {{ $(\"Consultar Stock y Precio\").item.json.stock }}). ¿Deseas comprar? Responde SI o NO.",
+        "additionalFields": {}
+      },
+      "id": "70dc7f6f-9e78-4c38-a575-06ebc6aa7279",
+      "name": "Informar: Disponibilidad y Precio",
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        2368,
+        0
+      ],
+      "webhookId": "a81440f7-1107-4a36-b793-98bc05d03ea5"
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "={{ $(\"Normalizar Entrada\").item.json.phone_number_id }}",
+        "recipientPhoneNumber": "={{ $(\"Normalizar Entrada\").item.json.telefono }}",
+        "textBody": "Lo sentimos, por el momento no contamos con stock disponible de ese producto. Gracias por escribirnos.",
+        "additionalFields": {}
+      },
+      "id": "22875e19-8e9a-4f05-a091-296ecf2da4b5",
+      "name": "Informar: Sin Stock",
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        2144,
+        192
+      ],
+      "webhookId": "f7beb8a2-69b9-491c-9555-1cc3b8030667"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO cola_fallidos (telefono, mensaje, motivo, creado_en) VALUES ($1, $2, 'solicitud_invalida', NOW())",
+        "options": {
+          "queryReplacement": "={{ [$(\"Normalizar Entrada\").item.json.telefono, $(\"Normalizar Entrada\").item.json.texto] }}"
+        }
+      },
+      "id": "644de459-c866-43b6-a79a-bcd77d92f259",
+      "name": "Registrar en Cola de Fallidos",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1696,
+        288
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "LejxlI9cpUbAOepL",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "={{ $(\"Normalizar Entrada\").item.json.phone_number_id }}",
+        "recipientPhoneNumber": "={{ $(\"Normalizar Entrada\").item.json.telefono }}",
+        "textBody": "No logramos entender tu solicitud. Por favor indícanos el producto que necesitas y la cantidad (por ejemplo: \"Quiero 2 balanzas analiticas\").",
+        "additionalFields": {}
+      },
+      "id": "d0d381e4-33e3-4e53-84ba-48a147663a9d",
+      "name": "Responder: No Entendido",
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        1920,
+        288
+      ],
+      "webhookId": "485db991-4c93-4a82-ad42-61aa5a199755"
+    },
+    {
+      "parameters": {
+        "jsCode": "const base = $('Determinar Fase').first().json;\nconst t = (base.texto || '').toLowerCase().trim();\nconst noWords = ['no', 'cancelar', 'luego', 'despues', 'después', 'mejor no', 'ya no', 'nel'];\nconst siWords = ['si', 'sí', 'claro', 'ok', 'dale', 'quiero', 'confirmo', 'comprar', 'yes', 'listo', 'va', 'acepto'];\nlet decision = 'no';\nconst isNo = noWords.some(function(w){ return t === w || t.indexOf(w) === 0; });\nconst isSi = siWords.some(function(w){ return t.indexOf(w) !== -1; });\nif (isNo) { decision = 'no'; } else if (isSi) { decision = 'si'; }\nreturn [{ json: Object.assign({}, base, { decision: decision }) }];"
+      },
+      "id": "ef306f96-4781-4a51-b9bd-6ccc5df14c9a",
+      "name": "Interpretar Decisión",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1248,
+        912
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "d1",
+              "leftValue": "={{ $json.decision }}",
+              "rightValue": "si",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ecea13cc-461e-43a5-b35d-f850504f9b3c",
+      "name": "¿Desea Comprar?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1536,
+        912
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO pedidos (telefono, producto_id, producto_nombre, cantidad, precio_unitario, total, estado, idempotency_key, creado_en) VALUES ($1, $2, $3, $4, $5, $6, 'Pendiente de pago', $7, NOW()) ON CONFLICT (idempotency_key) DO UPDATE SET estado = pedidos.estado RETURNING pedido_id",
+        "options": {
+          "queryReplacement": "={{ [$json.telefono, $json.producto_id, $json.producto_nombre, $json.cantidad, $json.precio, ($json.precio * $json.cantidad), $json.message_id] }}"
+        }
+      },
+      "id": "5c926bc5-97ba-400c-913c-2ba4d1330af7",
+      "name": "Registrar Pedido",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1760,
+        816
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "LejxlI9cpUbAOepL",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE conversaciones SET estado = 'esperando_pago', pedido_id = $2, intentos = 0, actualizado_en = NOW() WHERE telefono = $1",
+        "options": {
+          "queryReplacement": "={{ [$(\"Interpretar Decisión\").item.json.telefono, $json.pedido_id] }}"
+        }
+      },
+      "id": "4dcaadfd-1ad6-48e5-b201-cc68860e6deb",
+      "name": "Actualizar Estado: Pago",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1984,
+        816
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "LejxlI9cpUbAOepL",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "={{ $(\"Normalizar Entrada\").item.json.phone_number_id }}",
+        "recipientPhoneNumber": "={{ $(\"Normalizar Entrada\").item.json.telefono }}",
+        "textBody": "=Tu pedido #{{ $(\"Registrar Pedido\").item.json.pedido_id }} fue registrado (Pendiente de pago). Métodos de pago disponibles: 1) Efectivo / contra entrega  2) Yape  3) Plin  4) Transferencia BCP. Cuando pagues, envíanos la foto o PDF del comprobante para validar el pago.",
+        "additionalFields": {}
+      },
+      "id": "bf957ee5-4644-43e4-8c82-bd6481188283",
+      "name": "Enviar Métodos de Pago",
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        2208,
+        816
+      ],
+      "webhookId": "39da50d0-c8f8-4d72-bf31-b0d68ce48585"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE conversaciones SET estado = 'finalizado', actualizado_en = NOW() WHERE telefono = $1",
+        "options": {
+          "queryReplacement": "={{ [$json.telefono] }}"
+        }
+      },
+      "id": "32c47733-acb6-47de-9be5-600f1c03acfb",
+      "name": "Cerrar: Compra Rechazada",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1760,
+        1008
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "LejxlI9cpUbAOepL",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "={{ $(\"Normalizar Entrada\").item.json.phone_number_id }}",
+        "recipientPhoneNumber": "={{ $(\"Normalizar Entrada\").item.json.telefono }}",
+        "textBody": "Entendido, no registraremos la compra. Cuando quieras estamos para ayudarte. Gracias por escribirnos.",
+        "additionalFields": {}
+      },
+      "id": "6f3be635-3652-43d5-9ffa-9c69965096cd",
+      "name": "Responder: Interacción Finalizada",
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        1984,
+        1008
+      ],
+      "webhookId": "027fbd04-ca6e-4469-9e3a-fe26fbd55e3a"
+    },
+    {
+      "parameters": {
+        "resource": "media",
+        "operation": "mediaUrlGet",
+        "mediaGetId": "={{ $json.media_id }}"
+      },
+      "id": "d5ba03bc-1229-4717-8aab-9fa74d6feb9f",
+      "name": "Obtener URL del Comprobante",
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        1072,
+        1776
+      ],
+      "webhookId": "f5e527e0-91a6-4631-99da-a6c2848a7a55"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "whatsAppApi",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "id": "481f78c8-4cfd-4252-b2aa-c87e60c44c73",
+      "name": "Descargar Comprobante",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1360,
+        1776
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "document",
+        "modelId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "models/gemini-2.5-flash",
+          "cachedResultName": "models/gemini-2.5-flash"
+        },
+        "text": "Este es un comprobante de pago (Yape, Plin o transferencia). Devuelve UNICAMENTE un objeto JSON con las claves: monto (numero), operacion (string con el numero de operacion o codigo de seguridad) y fecha (formato YYYY-MM-DD). Sin texto adicional.",
+        "inputType": "binary",
+        "options": {}
+      },
+      "id": "6d64e583-e3b9-4e83-9c8b-20a96e4157d1",
+      "name": "Analizar Comprobante (Gemini)",
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        1584,
+        1776
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": null,
+          "name": "Gateway credits",
+          "__aiGatewayManaged": true
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const base = $('Determinar Fase').first().json;\nconst g = $input.first().json || {};\nlet raw = '';\nif (typeof g.content === 'string') { raw = g.content; }\nelse if (typeof g.text === 'string') { raw = g.text; }\nelse if (g.content && g.content[0] && g.content[0].text) { raw = g.content[0].text; }\nelse { raw = JSON.stringify(g); }\nlet extracted = {};\ntry { const m = raw.match(/\\{[\\s\\S]*\\}/); if (m) { extracted = JSON.parse(m[0]); } } catch (e) { extracted = {}; }\nconst operacion = String(extracted.operacion || extracted.numero_operacion || '').replace(/\\s/g, '');\nconst monto = (extracted.monto != null) ? extracted.monto : null;\nconst fecha = extracted.fecha || null;\nconst valido = operacion.length >= 6 && !!base.pedido_id;\nreturn [{ json: Object.assign({}, base, { operacion: operacion, monto: monto, fecha: fecha, comprobante_valido: valido }) }];"
+      },
+      "id": "0a44ad72-ef86-42de-93cc-1c7c3f35adb7",
+      "name": "Validar Comprobante",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1808,
+        1776
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.comprobante_valido }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "400416f9-c732-44ce-a761-d7aecf09cf23",
+      "name": "¿Comprobante Válido?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2032,
+        1776
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH u AS (   UPDATE pedidos SET estado = 'Pagado' WHERE pedido_id = $1 RETURNING producto_id, cantidad ), v AS (   INSERT INTO ventas (pedido_id, telefono, monto, operacion, estado, creado_en)   VALUES ($1, $2, $3, $4, 'Pagado', NOW()) RETURNING venta_id ), s AS (   UPDATE inventario SET stock = stock - (SELECT cantidad FROM u) WHERE codigo = (SELECT producto_id FROM u) RETURNING stock ) SELECT (SELECT venta_id FROM v) AS venta_id, (SELECT stock FROM s) AS stock_nuevo",
+        "options": {
+          "queryReplacement": "={{ [$json.pedido_id, $json.telefono, $json.monto, $json.operacion] }}"
+        }
+      },
+      "id": "a5fb9eca-9607-4ed9-b478-c5342ead42ea",
+      "name": "Registrar Venta y Actualizar Stock",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2256,
+        1392
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "LejxlI9cpUbAOepL",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "={{ $(\"Normalizar Entrada\").item.json.phone_number_id }}",
+        "recipientPhoneNumber": "={{ $(\"Normalizar Entrada\").item.json.telefono }}",
+        "textBody": "=Pago confirmado. Tu pedido #{{ $(\"Determinar Fase\").item.json.pedido_id }} quedó PAGADO (venta #{{ $json.venta_id }}). Gracias por tu compra, coordinaremos la entrega contigo.",
+        "additionalFields": {}
+      },
+      "id": "ddb119a2-3d38-4723-b5a2-812f0ee058cc",
+      "name": "Confirmar Pedido al Cliente",
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        2480,
+        1392
+      ],
+      "webhookId": "4ae44fa2-e219-45c7-9a94-ad2296074571"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE conversaciones SET estado = 'finalizado', actualizado_en = NOW() WHERE telefono = $1",
+        "options": {
+          "queryReplacement": "={{ [$(\"Determinar Fase\").item.json.telefono] }}"
+        }
+      },
+      "id": "04df7cb1-4405-4bd4-9690-dd1ece70410a",
+      "name": "Cerrar Conversación",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2704,
+        1392
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "LejxlI9cpUbAOepL",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE conversaciones SET intentos = intentos + 1, actualizado_en = NOW() WHERE telefono = $1 RETURNING intentos",
+        "options": {
+          "queryReplacement": "={{ [$json.telefono] }}"
+        }
+      },
+      "id": "f932d32b-5115-4156-a4a5-af6031a2cb92",
+      "name": "Incrementar Intentos",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2256,
+        1872
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "LejxlI9cpUbAOepL",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "i1",
+              "leftValue": "={{ $json.intentos }}",
+              "rightValue": 2,
+              "operator": {
+                "type": "number",
+                "operation": "lte"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "fc5d1d14-8b1d-4f12-9a0d-737abe808a5e",
+      "name": "¿Reintentos Disponibles?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2480,
+        1872
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "={{ $(\"Normalizar Entrada\").item.json.phone_number_id }}",
+        "recipientPhoneNumber": "={{ $(\"Normalizar Entrada\").item.json.telefono }}",
+        "textBody": "No pudimos validar tu comprobante. Por favor envía nuevamente una foto o PDF claro del comprobante de pago (que se vea el monto, número de operación y fecha).",
+        "additionalFields": {}
+      },
+      "id": "df1c2ef9-5646-4fcb-8adb-cc897241ebac",
+      "name": "Solicitar Nuevo Comprobante",
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        2704,
+        1584
+      ],
+      "webhookId": "fbfbc7f8-59be-4ee8-8bc1-487ac1895bc6"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO derivaciones (telefono, pedido_id, motivo, creado_en) VALUES ($1, $2, 'comprobante_invalido_2_intentos', NOW()); UPDATE conversaciones SET estado = 'derivado', actualizado_en = NOW() WHERE telefono = $1",
+        "options": {
+          "queryReplacement": "={{ [$(\"Determinar Fase\").item.json.telefono, $(\"Determinar Fase\").item.json.pedido_id] }}"
+        }
+      },
+      "id": "7ea3a949-6d69-47a8-9d4d-d8fec702b6a0",
+      "name": "Derivar a Agente Humano",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2704,
+        1968
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "LejxlI9cpUbAOepL",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "={{ $(\"Normalizar Entrada\").item.json.phone_number_id }}",
+        "recipientPhoneNumber": "={{ $(\"Normalizar Entrada\").item.json.telefono }}",
+        "textBody": "Hemos derivado tu caso a un agente humano para ayudarte con la validación del pago. En breve una persona de nuestro equipo se pondrá en contacto contigo.",
+        "additionalFields": {}
+      },
+      "id": "2cab947d-e9f0-43fb-b51d-d0d977cd9267",
+      "name": "Notificar: Derivado a Agente",
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        2928,
+        1968
+      ],
+      "webhookId": "1e8ef274-209d-42eb-b16b-a4e34c963eee"
+    }
+  ],
+  "connections": {
+    "WhatsApp Trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalizar Entrada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar Entrada": {
+      "main": [
+        [
+          {
+            "node": "Buscar Conversación",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Conversación": {
+      "main": [
+        [
+          {
+            "node": "Determinar Fase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Determinar Fase": {
+      "main": [
+        [
+          {
+            "node": "Router de Fase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Router de Fase": {
+      "main": [
+        [
+          {
+            "node": "Validar Solicitud",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Interpretar Decisión",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Obtener URL del Comprobante",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar Solicitud": {
+      "main": [
+        [
+          {
+            "node": "¿Solicitud Válida?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Modelo Gemini (Validación)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Validar Solicitud",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Solicitud Válida?": {
+      "main": [
+        [
+          {
+            "node": "Consultar Stock y Precio",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar en Cola de Fallidos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consultar Stock y Precio": {
+      "main": [
+        [
+          {
+            "node": "¿Hay Stock?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Hay Stock?": {
+      "main": [
+        [
+          {
+            "node": "Guardar Estado: Confirmación",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Informar: Sin Stock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar Estado: Confirmación": {
+      "main": [
+        [
+          {
+            "node": "Informar: Disponibilidad y Precio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar en Cola de Fallidos": {
+      "main": [
+        [
+          {
+            "node": "Responder: No Entendido",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Interpretar Decisión": {
+      "main": [
+        [
+          {
+            "node": "¿Desea Comprar?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Desea Comprar?": {
+      "main": [
+        [
+          {
+            "node": "Registrar Pedido",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Cerrar: Compra Rechazada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar Pedido": {
+      "main": [
+        [
+          {
+            "node": "Actualizar Estado: Pago",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Actualizar Estado: Pago": {
+      "main": [
+        [
+          {
+            "node": "Enviar Métodos de Pago",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cerrar: Compra Rechazada": {
+      "main": [
+        [
+          {
+            "node": "Responder: Interacción Finalizada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Obtener URL del Comprobante": {
+      "main": [
+        [
+          {
+            "node": "Descargar Comprobante",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Descargar Comprobante": {
+      "main": [
+        [
+          {
+            "node": "Analizar Comprobante (Gemini)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analizar Comprobante (Gemini)": {
+      "main": [
+        [
+          {
+            "node": "Validar Comprobante",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar Comprobante": {
+      "main": [
+        [
+          {
+            "node": "¿Comprobante Válido?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Comprobante Válido?": {
+      "main": [
+        [
+          {
+            "node": "Registrar Venta y Actualizar Stock",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Incrementar Intentos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar Venta y Actualizar Stock": {
+      "main": [
+        [
+          {
+            "node": "Confirmar Pedido al Cliente",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirmar Pedido al Cliente": {
+      "main": [
+        [
+          {
+            "node": "Cerrar Conversación",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Incrementar Intentos": {
+      "main": [
+        [
+          {
+            "node": "¿Reintentos Disponibles?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Reintentos Disponibles?": {
+      "main": [
+        [
+          {
+            "node": "Solicitar Nuevo Comprobante",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Derivar a Agente Humano",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Derivar a Agente Humano": {
+      "main": [
+        [
+          {
+            "node": "Notificar: Derivado a Agente",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "staticData": null,
+  "pinData": {},
+  "triggerCount": 0,
+  "meta": null
+}
