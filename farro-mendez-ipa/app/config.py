@@ -49,8 +49,8 @@ class Settings(BaseSettings):
         description="Clave de API para invocar modelos Google Gemini"
     )
     GEMINI_MODEL: str = Field(
-        default="gemini-1.5-flash",
-        description="Nombre del modelo Gemini a utilizar (ej. gemini-1.5-flash, gemini-2.5-flash)"
+        default="gemini-2.5-flash",
+        description="Nombre del modelo Gemini a utilizar (ej. gemini-2.5-flash, gemini-1.5-flash)"
     )
 
     # Configuración de Flujo y Servidor

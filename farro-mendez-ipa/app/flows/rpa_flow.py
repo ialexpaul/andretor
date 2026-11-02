@@ -244,12 +244,12 @@ async def procesar_flujo_rpa(
         conv.intentos += 1
         await db.commit()
 
-        if conv.intentos <= 2:
-            # Reintentos disponibles: solicitar nuevo comprobante
+        if conv.intentos < 2:
+            # 1er intento fallido: solicitar nuevo comprobante
             await enviar_mensaje(telefono=telefono, texto=MSG_SOLICITAR_NUEVO_COMPROBANTE, phone_number_id=msg.phone_number_id)
             return {"fase": "pago", "resultado": "invalido", "intentos": conv.intentos}
         else:
-            # Falla consecutiva > 2: Derivar a humano
+            # 2do intento fallido consecutivo: derivar a humano
             caso = await registrar_caso_escalado(
                 db=db,
                 telefono=telefono,

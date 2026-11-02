@@ -78,10 +78,16 @@ def _guardar_mensaje_sesion(telefono: str, mensaje: BaseMessage) -> None:
         _MEMORY_STORE[telefono] = historial[-(MAX_WINDOW_LENGTH * 2):]
 
 
+from langgraph.checkpoint.memory import MemorySaver
+
+# Checkpointer global en memoria de LangGraph para persistencia de sesiones por thread_id
+_AGENT_CHECKPOINTER = MemorySaver()
+
+
 async def procesar_flujo_agentico(
     msg: MensajeWhatsAppNormalizado
 ) -> Dict[str, Any]:
-    """Ejecuta el flujo agéntico con LangChain y Google Gemini.
+    """Ejecuta el flujo agéntico con LangChain, LangGraph y Google Gemini 2.5 Flash.
 
     Args:
         msg: Mensaje normalizado recibido del webhook.
@@ -102,7 +108,7 @@ async def procesar_flujo_agentico(
     else:
         user_input = f"El cliente {telefono} dice: {texto}"
 
-    logger.info(f"[AGENTIC FLOW] Invocando AI Agent para {telefono}")
+    logger.info(f"[AGENTIC FLOW] Invocando AI Agent (LangGraph Checkpoint thread_id={telefono})")
 
     # Inicializar modelo Gemini o fallback
     api_key = settings.GEMINI_API_KEY
@@ -116,15 +122,20 @@ async def procesar_flujo_agentico(
                 temperature=0.2
             )
 
+            # Grafo LangGraph con Checkpointer integrado por thread_id (Sesión 09)
             agent = create_react_agent(
                 model=llm,
                 tools=AGENT_TOOLS,
-                prompt=SYSTEM_PROMPT_BPMN
+                prompt=SYSTEM_PROMPT_BPMN,
+                checkpointer=_AGENT_CHECKPOINTER
             )
 
-            historial = _obtener_historial_sesion(telefono)
-            mensajes_input = list(historial) + [HumanMessage(content=user_input)]
-            resultado = await agent.ainvoke({"messages": mensajes_input})
+            # Invocación con configuración de sesión persistente (thread_id = número del cliente)
+            config = {"configurable": {"thread_id": telefono}}
+            resultado = await agent.ainvoke(
+                {"messages": [HumanMessage(content=user_input)]},
+                config=config
+            )
 
             mensajes_salida = resultado.get("messages", [])
             respuesta_texto = ""
@@ -132,21 +143,18 @@ async def procesar_flujo_agentico(
                 ultimo_msg = mensajes_salida[-1]
                 respuesta_texto = getattr(ultimo_msg, "content", str(ultimo_msg))
 
-            # Actualizar memoria de conversación
-            _guardar_mensaje_sesion(telefono, HumanMessage(content=user_input))
-            _guardar_mensaje_sesion(telefono, AIMessage(content=respuesta_texto))
-
             # Enviar respuesta al cliente vía WhatsApp
             await enviar_mensaje(telefono=telefono, texto=respuesta_texto, phone_number_id=msg.phone_number_id)
 
             return {
                 "modo": "agentic",
                 "telefono": telefono,
+                "thread_id": telefono,
                 "respuesta": respuesta_texto,
                 "status": "success"
             }
         except Exception as exc:
-            logger.error(f"[AGENTIC FLOW] Error en ejecución de LangChain: {exc}")
+            logger.error(f"[AGENTIC FLOW] Error en ejecución de LangGraph: {exc}")
 
     # Fallback transparente si no hay API key de Gemini activa:
     # Se asegura la continuidad del servicio ejecutando las tools con la lógica de negocio.

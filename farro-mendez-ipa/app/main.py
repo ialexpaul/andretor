@@ -14,7 +14,11 @@ from sqlalchemy import select
 from app.config import settings
 from app.database import get_db, async_session_factory
 from app.schemas.whatsapp import extraer_mensaje_normalizado, MensajeWhatsAppNormalizado
-from app.services.inventario_service import seed_catalogo_si_vacio, listar_catalogo
+from app.schemas.contrato_entrada import validar_payload_contrato, ContratoEntrada
+from app.services.inventario_service import seed_catalogo_si_vacio, listar_catalogo, consultar_producto
+from app.services.pedido_service import registrar_pedido_con_idempotencia
+from app.services.venta_service import registrar_venta_y_actualizar_stock
+from app.services.cola_fallidos_service import registrar_en_cola_fallidos
 from app.flows.rpa_flow import procesar_flujo_rpa
 from app.flows.agentic_flow import procesar_flujo_agentico
 from app.models.pedido import Pedido
@@ -123,6 +127,187 @@ async def recibir_mensaje_webhook(
         content={"status": "processed", "mode": modo, "result": resultado},
         status_code=status.HTTP_200_OK
     )
+
+
+# =====================================================================
+# ENDPOINTS DE PROCESO Y CONTRATO DE ENTRADA (LABORATORIO 02)
+# =====================================================================
+
+@app.post("/api/proceso/solicitud", tags=["Proceso BPMN / Lab 2"])
+async def procesar_solicitud_contrato(
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """Endpoint oficial para procesar solicitudes sujetas al Contrato de Datos de Entrada (Lab 2).
+
+    Valida el contrato estricto:
+    - Si falla la validación: responde HTTP 400 y registra en rpa_cola_fallidos con la carga original.
+    - Si accion == 'consulta': verifica stock en tiempo real y retorna HTTP 200.
+    - Si accion == 'compra': aplica validación de idempotencia SHA-256. Devuelve HTTP 201 (nuevo) o 200 (existente sin duplicar).
+    - Si accion == 'pago': valida longitud >= 6 caracteres, registra venta y descuenta stock (HTTP 200).
+    """
+    try:
+        payload = await request.json()
+    except Exception:
+        # Fallo de parseo JSON básico -> HTTP 400 y registrar en cola de fallidos
+        await registrar_en_cola_fallidos(
+            db=db,
+            telefono="DESCONOCIDO",
+            mensaje_original="Payload JSON malformado",
+            motivo="JSON Decode Error",
+            carga_original=None
+        )
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"error": "Payload JSON malformado", "codigo": 400}
+        )
+
+    # Validar contra el contrato de entrada
+    es_valido, contrato, motivo_error = validar_payload_contrato(payload)
+
+    if not es_valido or not contrato:
+        # Registrar en cola de fallidos con la carga original íntegra
+        telefono_cliente = str(payload.get("cliente") or payload.get("telefono") or "DESCONOCIDO")
+        await registrar_en_cola_fallidos(
+            db=db,
+            telefono=telefono_cliente,
+            mensaje_original=str(payload),
+            motivo=f"Violación de Contrato: {motivo_error}",
+            carga_original=payload
+        )
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "error": "Solicitud no cumple el Contrato de Datos de Entrada",
+                "motivo": motivo_error,
+                "codigo": 400,
+                "registrado_en_cola_fallidos": True
+            }
+        )
+
+    # 1. ACCION: CONSULTA
+    if contrato.accion == "consulta":
+        prod = await consultar_producto(db, contrato.producto)
+        if not prod or prod.stock <= 0:
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={
+                    "status": "sin_stock",
+                    "mensaje": f"No hay stock disponible para el producto '{contrato.producto}'",
+                    "disponible": False
+                }
+            )
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "status": "disponible",
+                "disponible": True,
+                "producto_id": prod.product_id,
+                "nombre": prod.nombre,
+                "precio": float(prod.precio),
+                "stock": prod.stock,
+                "mensaje": f"Stock disponible: {prod.nombre} a S/ {prod.precio:.2f} ({prod.stock} unidades)"
+            }
+        )
+
+    # 2. ACCION: COMPRA
+    elif contrato.accion == "compra":
+        if contrato.decision == "no":
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={"status": "compra_rechazada", "mensaje": "Compra cancelada por decisión del cliente"}
+            )
+
+        prod = await consultar_producto(db, contrato.producto)
+        if not prod or prod.stock < contrato.cantidad:
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={
+                    "status": "stock_insuficiente",
+                    "mensaje": f"Stock insuficiente para {contrato.producto}. Solicitado: {contrato.cantidad}, Disponible: {prod.stock if prod else 0}"
+                }
+            )
+
+        # Inserción con idempotencia estricta SHA-256
+        pedido, fue_insertado = await registrar_pedido_con_idempotencia(
+            db=db,
+            telefono=contrato.cliente,
+            producto_id=prod.product_id,
+            producto_nombre=prod.nombre,
+            cantidad=contrato.cantidad,
+            precio_unitario=prod.precio,
+            accion="compra"
+        )
+
+        status_http = status.HTTP_201_CREATED if fue_insertado else status.HTTP_200_OK
+        return JSONResponse(
+            status_code=status_http,
+            content={
+                "status": "registrado" if fue_insertado else "pedido_existente",
+                "idempotente": not fue_insertado,
+                "pedido_id": pedido.pedido_id,
+                "monto_total": float(pedido.total),
+                "idempotency_key": pedido.idempotency_key,
+                "metodos_pago": ["Yape", "Plin", "Transferencia BCP"]
+            }
+        )
+
+    # 3. ACCION: PAGO
+    elif contrato.accion == "pago":
+        comprobante_limpio = (contrato.comprobante or "").strip()
+        if len(comprobante_limpio) < 6:
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={
+                    "status": "comprobante_invalido",
+                    "mensaje": "Comprobante inválido: debe contener al menos 6 caracteres alfanuméricos.",
+                    "requiere_reintento": True
+                }
+            )
+
+        try:
+            # Buscar el pedido para obtener datos y monto
+            q_ped = select(Pedido).where(Pedido.pedido_id == contrato.pedido_id)
+            res_ped = await db.execute(q_ped)
+            ped = res_ped.scalar_one_or_none()
+            if not ped:
+                await registrar_en_cola_fallidos(
+                    db=db,
+                    telefono="DESCONOCIDO",
+                    mensaje_original=str(payload),
+                    motivo=f"Pedido ID {contrato.pedido_id} inexistente",
+                    carga_original=payload
+                )
+                return JSONResponse(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    content={"error": f"Pedido ID '{contrato.pedido_id}' no existe en el sistema", "codigo": 400}
+                )
+
+            venta, stock_nuevo = await registrar_venta_y_actualizar_stock(
+                db=db,
+                pedido_id=ped.pedido_id,
+                telefono=ped.telefono,
+                monto=ped.total,
+                operacion=comprobante_limpio
+            )
+
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={
+                    "status": "venta_confirmada",
+                    "venta_id": venta.venta_id,
+                    "pedido_id": ped.pedido_id,
+                    "monto": float(venta.monto),
+                    "stock_actualizado": stock_nuevo,
+                    "mensaje": f"Pago confirmado y venta registrada exitosamente. ID Venta: {venta.venta_id}"
+                }
+            )
+        except Exception as exc:
+            logger.error(f"Error procesando pago de contrato: {exc}")
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content={"error": f"Error interno al concretar venta: {str(exc)}"}
+            )
 
 
 # =====================================================================
